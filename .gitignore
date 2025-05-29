@@ -1,0 +1,5 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+/.vs/if-these-walls-could-walk/FileContentIndex
+/.vs/If These Walls Could Walk/FileContentIndex
