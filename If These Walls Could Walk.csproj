@@ -4,4 +4,7 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <RootNamespace>IfTheseWallsCouldWalk</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <Folder Include="Book\" />
+  </ItemGroup>
 </Project>
