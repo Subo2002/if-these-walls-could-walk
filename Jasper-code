@@ -1,0 +1,247 @@
+using Godot; using System;
+
+public partial class Player : CharacterBody2D { // === PLAYER STATS === public int Health = 100; public int MaxHealth = 100;
+
+public int LightFruit = 100;
+public int MaxLightFruit = 100;
+
+// === MOVEMENT SETTINGS ===
+private const float WalkSpeed = 60f;             // Slow walk speed
+private const float JumpForce = -180f;           // Low jump height
+private const float Gravity = 350f;              // Gravity applied
+private const float MaxFallSpeed = 300f;         // Max fall velocity
+
+// === ATTACK ===
+private bool canAttack = true;
+private const float AttackCooldown = 1.2f;       // Seconds between attacks
+
+// === TORCH ===
+private bool torchOn = false;
+private const float TorchDrainRate = 5f;         // LightFruit drain per tick
+private const int TorchMinLightFruit = 10;       // Minimum to enable torch
+private const float FatigueInterval = 0.2f;      // How often torch drains
+
+// === REFERENCES ===
+private AnimatedSprite2D sprite;
+private Light2D torch;
+private Timer attackTimer;
+private Timer fatigueTimer;
+private Area2D attackHitbox;
+
+private ProgressBar healthBar;
+private ProgressBar lightFruitBar;
+
+private AudioStreamPlayer sfxAttack;
+private AudioStreamPlayer sfxTorchOn;
+private AudioStreamPlayer sfxTorchOff;
+private AudioStreamPlayer sfxBurnout;
+
+private GpuParticles2D pAttack;
+private GpuParticles2D pTorch;
+
+private PlayerExtras extras;
+private WeaponWheel weaponWheel;
+
+public override void _Ready()
+{
+    // Cache nodes on start
+    sprite = GetNode<AnimatedSprite2D>("AnimatedSprite2D");
+    torch = GetNode<Light2D>("Light2D");
+    attackTimer = GetNode<Timer>("Timer");
+    fatigueTimer = GetNode<Timer>("torch_fatigue_timer");
+    attackHitbox = GetNode<Area2D>("AttackHitbox");
+
+    sfxAttack = GetNode<AudioStreamPlayer>("attack_sound");
+    sfxTorchOn = GetNode<AudioStreamPlayer>("torch_on_sound");
+    sfxTorchOff = GetNode<AudioStreamPlayer>("torch_off_sound");
+    sfxBurnout = GetNode<AudioStreamPlayer>("torch_burnout_sound");
+
+    pAttack = GetNode<GpuParticles2D>("attack_particles");
+    pTorch = GetNode<GpuParticles2D>("torch_particles");
+
+    healthBar = GetNode<ProgressBar>("../UI/HealthBar");
+    lightFruitBar = GetNode<ProgressBar>("../UI/LightFruitBar");
+
+    extras = GetNode<PlayerExtras>("../PlayerExtras");
+    weaponWheel = GetNode<WeaponWheel>("../WeaponWheelUI");
+
+    weaponWheel.WeaponSelected += OnWeaponSelected;
+
+    attackHitbox.Monitoring = false;
+    torch.Visible = false;
+    fatigueTimer.WaitTime = FatigueInterval;
+    fatigueTimer.OneShot = false;
+}
+
+public override void _PhysicsProcess(double delta)
+{
+    // Skip torch control while weapon wheel is open
+    if (weaponWheel.Visible)
+    {
+        if (Input.IsActionJustPressed("torch_toggle"))
+        {
+            if (!torchOn && LightFruit > TorchMinLightFruit)
+                EnableTorch();
+            else
+                DisableTorch();
+        }
+        return;
+    }
+
+    // Core movement and action logic
+    HandleGravity((float)delta);
+    HandleMovement();
+    HandleAnimations();
+    MoveAndSlide();
+
+    if (Input.IsActionJustPressed("attack") && canAttack)
+        PerformAttack();
+
+    if (Input.IsActionJustPressed("torch_toggle"))
+    {
+        if (!torchOn && LightFruit > TorchMinLightFruit)
+            EnableTorch();
+        else
+            DisableTorch();
+    }
+}
+
+public override void _Process(double delta)
+{
+    // Update health and LightFruit bars
+    healthBar.Value = Health;
+    lightFruitBar.Value = LightFruit;
+}
+
+private void HandleGravity(float delta)
+{
+    // Apply gravity when airborne
+    if (!IsOnFloor())
+    {
+        Velocity = new Vector2(Velocity.X, Mathf.Min(Velocity.Y + Gravity * delta, MaxFallSpeed));
+    }
+}
+
+private void HandleMovement()
+{
+    // Handle horizontal movement and jumping
+    float direction = Input.GetActionStrength("ui_right") - Input.GetActionStrength("ui_left");
+    Velocity = new Vector2(direction * WalkSpeed, Velocity.Y);
+
+    if (direction != 0)
+        sprite.FlipH = direction < 0;
+
+    if (Input.IsActionJustPressed("ui_up") && IsOnFloor())
+    {
+        Velocity = new Vector2(Velocity.X, JumpForce);
+        sprite.Play("jump");
+    }
+}
+
+private void HandleAnimations()
+{
+    // Change animations based on movement
+    if (IsOnFloor())
+    {
+        if (Velocity.X != 0)
+            sprite.Play("walk");
+        else
+            sprite.Play("idle");
+    }
+}
+
+private void PerformAttack()
+{
+    // Start attack sequence
+    canAttack = false;
+    sprite.Play("attack");
+    attackHitbox.Monitoring = true;
+    sfxAttack.Play();
+    pAttack.Restart();
+    attackTimer.Start(AttackCooldown);
+}
+
+private void OnTimerTimeout()
+{
+    // End attack cooldown
+    canAttack = true;
+    attackHitbox.Monitoring = false;
+}
+
+private void OnFatigueTimeout()
+{
+    // Drain LightFruit while torch is on
+    if (torchOn)
+    {
+        LightFruit -= (int)TorchDrainRate;
+        if (LightFruit <= 0)
+        {
+            LightFruit = 0;
+            sfxBurnout.Play();
+            extras.StartTorchCooldown();
+            DisableTorch();
+        }
+    }
+}
+
+private void EnableTorch()
+{
+    // Turn torch on
+    torchOn = true;
+    torch.Visible = true;
+    sfxTorchOn.Play();
+    pTorch.Restart();
+    fatigueTimer.Start();
+}
+
+private void DisableTorch()
+{
+    // Turn torch off
+    if (torchOn)
+    {
+        sfxTorchOff.Play();
+        pTorch.Restart();
+    }
+    torchOn = false;
+    torch.Visible = false;
+    fatigueTimer.Stop();
+}
+
+public void TakeDamage(int amount)
+{
+    // Handle damage and death
+    Health -= amount;
+    if (Health <= 0)
+    {
+        Health = 0;
+        Die();
+    }
+    else
+    {
+        extras.FlashDamage(sprite);
+    }
+}
+
+private void Die()
+{
+    // Trigger death behavior
+    extras.ShowDeathScreen();
+}
+
+private void OnAttackHitboxBodyEntered(Node body)
+{
+    // Deal damage to enemies
+    if (body.IsInGroup("enemies"))
+    {
+        body.Call("take_damage", 10);
+    }
+}
+
+private void OnWeaponSelected(string weaponName)
+{
+    // React to weapon selection
+    GD.Print($"Equipped: {weaponName}");
+    // Add weapon swap logic here
+}
+
+}
