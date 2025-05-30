@@ -1,0 +1,128 @@
+using Godot;
+using System; 
+using System.Collections.Generic;
+
+public partial class WeaponWheel : CanvasLayer { // List of available options in the wheel private List<string> options = new() { "Torch", "Attack1", "Attack2", "Heal" }; private int selectedIndex = 0;
+
+// Public property to check if the wheel is currently visible
+public bool IsOpen => Visible;
+
+// UI element references
+private List<Button> wheelButtons;              // List of radial slot buttons
+private Label weaponLabel;                      // Displays selected option name
+private TextureRect backgroundWheel;            // Wheel graphic background
+
+// Optional visual/audio effect nodes
+private ColorRect screenOverlay;                // Screen shader overlay
+private AudioStreamPlayer masterAudio;          // Master pitch controller (if used)
+
+// Slowdown and visual/audio effect settings
+private const float TimeScaleSlow = 0.1f;
+private const float TimeScaleNormal = 1.0f;
+private const float PitchScaleSlow = 0.6f;
+private const float PitchScaleNormal = 1.0f;
+
+// Signal to notify Jasper/player what was selected
+[Signal]
+public delegate void WeaponSelectedEventHandler(string optionName);
+
+public override void _Ready()
+{
+    // Cache weapon slot buttons
+    wheelButtons = new List<Button>
+    {
+        GetNode<Button>("WeaponSlot1"),
+        GetNode<Button>("WeaponSlot2"),
+        GetNode<Button>("WeaponSlot3"),
+        GetNode<Button>("WeaponSlot4")
+    };
+
+    // Cache UI elements
+    weaponLabel = GetNode<Label>("WeaponNameLabel");
+    backgroundWheel = GetNode<TextureRect>("BackgroundWheel");
+
+    // Optional effect nodes
+    screenOverlay = GetNodeOrNull<ColorRect>("../ScreenOverlay");
+    masterAudio = GetNodeOrNull<AudioStreamPlayer>("../MasterAudio");
+
+    HideWheel(); // Wheel starts hidden
+}
+
+public override void _Process(double delta)
+{
+    // Show weapon wheel when input is pressed
+    if (Input.IsActionJustPressed("weapon_wheel"))
+    {
+        ShowWheel();
+    }
+    // Confirm and emit selected weapon when input is released
+    else if (Input.IsActionJustReleased("weapon_wheel"))
+    {
+        ConfirmSelection();
+    }
+
+    // While wheel is open, update selected slot based on mouse direction
+    if (IsOpen)
+    {
+        UpdateSelectionByMouse();
+    }
+}
+
+// Show and reset weapon wheel, slow down time, enable effects
+private void ShowWheel()
+{
+    Visible = true;
+    weaponLabel.Text = "";
+    Engine.TimeScale = TimeScaleSlow;
+
+    if (screenOverlay != null)
+        screenOverlay.Visible = true;
+
+    if (masterAudio != null)
+        masterAudio.PitchScale = PitchScaleSlow;
+}
+
+// Hide weapon wheel UI and restore time and effects
+private void HideWheel()
+{
+    Visible = false;
+    Engine.TimeScale = TimeScaleNormal;
+
+    if (screenOverlay != null)
+        screenOverlay.Visible = false;
+
+    if (masterAudio != null)
+        masterAudio.PitchScale = PitchScaleNormal;
+}
+
+// Confirm the currently highlighted option and emit to Jasper
+private void ConfirmSelection()
+{
+    HideWheel();
+    string selectedOption = options[selectedIndex];
+    EmitSignal(SignalName.WeaponSelected, selectedOption);
+}
+
+// Detect direction of mouse relative to center of the wheel to select a slot
+private void UpdateSelectionByMouse()
+{
+    Vector2 center = backgroundWheel.GlobalPosition + backgroundWheel.Size / 2;
+    float angle = (GetGlobalMousePosition() - center).Angle();
+
+    if (angle < 0)
+        angle += Mathf.Tau; // Normalize angle to 0 - 2PI
+
+    // Determine selected index based on angle
+    selectedIndex = Mathf.RoundToInt((angle / Mathf.Tau) * options.Count) % options.Count;
+
+    // Highlight current selection
+    for (int i = 0; i < wheelButtons.Count; i++)
+    {
+        wheelButtons[i].Modulate = Colors.White;
+    }
+
+    wheelButtons[selectedIndex].Modulate = Colors.Yellow;
+    weaponLabel.Text = options[selectedIndex];
+}
+
+}
