@@ -1,157 +1,235 @@
-extends [CharacterBody2D]
+using Godot; using System;
 
-# === PLAYER STATS ===
-var health: int = 100
-var max_health: int = 100
+public partial class Player : CharacterBody2D { // === PLAYER STATS === public int Health = 100; public int MaxHealth = 100;
 
-var light_fruit: int = 100
-var light_fruit_max: int = 100
+public int LightFruit = 100;
+public int MaxLightFruit = 100;
 
-# === MOVEMENT ===
-const WALK_SPEED: float = 60
-const JUMP_FORCE: float = -180
-const GRAVITY: float = 350
-const MAX_FALL_SPEED: float = 300
+// === MOVEMENT SETTINGS ===
+private const float WalkSpeed = 60f;             // Slow walk speed
+private const float JumpForce = -180f;           // Low jump height
+private const float Gravity = 350f;              // Gravity applied
+private const float MaxFallSpeed = 300f;         // Max fall velocity
 
-# === ATTACK ===
-var can_attack: bool = true
-const ATTACK_COOLDOWN: float = 1.2
+// === ATTACK ===
+private bool canAttack = true;
+private const float AttackCooldown = 1.2f;       // Seconds between attacks
 
-# === TORCH SYSTEM ===
-var torch_on: bool = false
-const TORCH_DRAIN_RATE: float = 5.0              # Units of Light Fruit per drain tick
-const TORCH_MINIMUM_FRUIT: int = 10              # Can't toggle on if under this
-const FATIGUE_INTERVAL: float = 0.2              # Drain interval in seconds
+// === TORCH ===
+private bool torchOn = false;
+private const float TorchDrainRate = 5f;         // LightFruit drain per tick
+private const int TorchMinLightFruit = 10;       // Minimum to enable torch
+private const float FatigueInterval = 0.2f;      // How often torch drains
 
-# === UI REFERENCES ===
-@onready var ui_health_bar = $"../UI/HealthBar"
-@onready var ui_light_bar = $"../UI/LightFruitBar"
+// === REFERENCES ===
+private AnimatedSprite2D sprite;
+private Light2D torch;
+private Timer attackTimer;
+private Timer fatigueTimer;
+private Area2D attackHitbox;
 
-# === NODE REFERENCES ===
-@onready var sprite = $AnimatedSprite2D
-@onready var torch = $Light2D
-@onready var attack_timer = $Timer
-@onready var fatigue_timer = $torch_fatigue_timer
-@onready var attack_hitbox = $AttackHitbox
+private ProgressBar healthBar;
+private ProgressBar lightFruitBar;
 
-# === SOUND EFFECTS ===
-@onready var sfx_attack = $attack_sound
-@onready var sfx_torch_on = $torch_on_sound
-@onready var sfx_torch_off = $torch_off_sound
-@onready var sfx_burnout = $torch_burnout_sound
+private AudioStreamPlayer sfxAttack;
+private AudioStreamPlayer sfxTorchOn;
+private AudioStreamPlayer sfxTorchOff;
+private AudioStreamPlayer sfxBurnout;
 
-# === PARTICLES ===
-@onready var p_attack = $attack_particles
-@onready var p_torch = $torch_particles
+private GpuParticles2D pAttack;
+private GpuParticles2D pTorch;
 
-# === INITIAL SETUP ===
-func _ready():
-	torch.visible = false                          # Start with torch off
-	attack_hitbox.monitoring = false               # Hitbox disabled until attack
-	fatigue_timer.wait_time = FATIGUE_INTERVAL     # How fast torch drains
-	fatigue_timer.one_shot = false
+private PlayerExtras extras;
+private WeaponWheel weaponWheel;
 
-# === MAIN LOOP ===
-func _physics_process(delta):
-	handle_gravity(delta)
-	handle_movement()
-	handle_animations()
-	move_and_slide()
+public override void _Ready()
+{
+    // Cache nodes on start
+    sprite = GetNode<AnimatedSprite2D>("AnimatedSprite2D");
+    torch = GetNode<Light2D>("Light2D");
+    attackTimer = GetNode<Timer>("Timer");
+    fatigueTimer = GetNode<Timer>("torch_fatigue_timer");
+    attackHitbox = GetNode<Area2D>("AttackHitbox");
 
-	# Torch and attack input
-	if Input.is_action_just_pressed("attack") and can_attack:
-		perform_attack()
+    sfxAttack = GetNode<AudioStreamPlayer>("attack_sound");
+    sfxTorchOn = GetNode<AudioStreamPlayer>("torch_on_sound");
+    sfxTorchOff = GetNode<AudioStreamPlayer>("torch_off_sound");
+    sfxBurnout = GetNode<AudioStreamPlayer>("torch_burnout_sound");
 
-	if Input.is_action_just_pressed("torch_toggle"):
-		if not torch_on and light_fruit > TORCH_MINIMUM_FRUIT:
-			enable_torch()
-		else:
-			disable_torch()
+    pAttack = GetNode<GpuParticles2D>("attack_particles");
+    pTorch = GetNode<GpuParticles2D>("torch_particles");
 
-# === UI BAR UPDATES ===
-func _process(delta):
-	ui_health_bar.value = health
-	ui_light_bar.value = light_fruit
+    healthBar = GetNode<ProgressBar>("../UI/HealthBar");
+    lightFruitBar = GetNode<ProgressBar>("../UI/LightFruitBar");
 
-# === FALLING LOGIC ===
-func handle_gravity(delta):
-	if not is_on_floor():
-		velocity.y += GRAVITY * delta
-		if velocity.y > MAX_FALL_SPEED:
-			velocity.y = MAX_FALL_SPEED
+    extras = GetNode<PlayerExtras>("../PlayerExtras");
+    weaponWheel = GetNode<WeaponWheel>("../WeaponWheelUI");
 
-# === HORIZONTAL + JUMP INPUT ===
-func handle_movement():
-	var input_direction = Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left")
-	velocity.x = input_direction * WALK_SPEED
+    weaponWheel.WeaponSelected += OnWeaponSelected;
 
-	if input_direction != 0:
-		sprite.flip_h = input_direction < 0
+    attackHitbox.Monitoring = false;
+    torch.Visible = false;
+    fatigueTimer.WaitTime = FatigueInterval;
+    fatigueTimer.OneShot = false;
+}
 
-	if Input.is_action_just_pressed("ui_up") and is_on_floor():
-		velocity.y = JUMP_FORCE
-		sprite.play("jump")
+public override void _PhysicsProcess(double delta)
+{
+    // Core movement and action logic
+    HandleGravity((float)delta);
+    HandleMovement();
+    HandleAnimations();
+    MoveAndSlide();
 
-# === ANIMATION HANDLING ===
-func handle_animations():
-	if is_on_floor():
-		if velocity.x != 0:
-			sprite.play("walk")
-		else:
-			sprite.play("idle")
+    if (Input.IsActionJustPressed("attack") && canAttack)
+        PerformAttack();
 
-# === ATTACK ACTION ===
-func perform_attack():
-	can_attack = false
-	sprite.play("attack")
-	attack_hitbox.monitoring = true
-	sfx_attack.play()
-	p_attack.restart()
-	attack_timer.start(ATTACK_COOLDOWN)
+    if (Input.IsActionJustPressed("torch_toggle"))
+    {
+        if (!torchOn && LightFruit > TorchMinLightFruit)
+            EnableTorch();
+        else
+            DisableTorch();
+    }
+}
 
-# === RE-ENABLE ATTACK ===
-func _on_Timer_timeout():
-	can_attack = true
-	attack_hitbox.monitoring = false
+public override void _Process(double delta)
+{
+    // Update health and LightFruit bars
+    healthBar.Value = Health;
+    lightFruitBar.Value = LightFruit;
+}
 
-# === TORCH DRAIN PER INTERVAL ===
-func _on_torch_fatigue_timer_timeout():
-	if torch_on:
-		light_fruit -= TORCH_DRAIN_RATE
-		if light_fruit <= 0:
-			light_fruit = 0
-			sfx_burnout.play()
-			disable_torch()
+private void HandleGravity(float delta)
+{
+    // Apply gravity when airborne
+    if (!IsOnFloor())
+    {
+        Velocity = new Vector2(Velocity.X, Mathf.Min(Velocity.Y + Gravity * delta, MaxFallSpeed));
+    }
+}
 
-# === TURN TORCH ON ===
-func enable_torch():
-	torch_on = true
-	torch.visible = true
-	sfx_torch_on.play()
-	p_torch.restart()
-	fatigue_timer.start()
+private void HandleMovement()
+{
+    // Handle horizontal movement and jumping
+    float direction = Input.GetActionStrength("ui_right") - Input.GetActionStrength("ui_left");
+    Velocity = new Vector2(direction * WalkSpeed, Velocity.Y);
 
-# === TURN TORCH OFF ===
-func disable_torch():
-	if torch_on:
-		sfx_torch_off.play()
-		p_torch.restart()
-	torch_on = false
-	torch.visible = false
-	fatigue_timer.stop()
+    if (direction != 0)
+        sprite.FlipH = direction < 0;
 
-# === DAMAGE HANDLER ===
-func take_damage(amount: int):
-	health -= amount
-	if health < 0:
-		health = 0
-		die()
+    if (Input.IsActionJustPressed("ui_up") && IsOnFloor())
+    {
+        Velocity = new Vector2(Velocity.X, JumpForce);
+        sprite.Play("jump");
+    }
+}
 
-func die():
-	queue_free() # Replace with custom death behavior
+private void HandleAnimations()
+{
+    // Change animations based on movement
+    if (IsOnFloor())
+    {
+        if (Velocity.X != 0)
+            sprite.Play("walk");
+        else
+            sprite.Play("idle");
+    }
+}
 
-# === ATTACK HITBOX: DAMAGE ENEMIES ===
-func _on_AttackHitbox_body_entered(body):
-	if body.is_in_group("enemies"):
-		body.take_damage(10)
+private void PerformAttack()
+{
+    // Start attack sequence
+    canAttack = false;
+    sprite.Play("attack");
+    attackHitbox.Monitoring = true;
+    sfxAttack.Play();
+    pAttack.Restart();
+    attackTimer.Start(AttackCooldown);
+}
+
+private void OnTimerTimeout()
+{
+    // End attack cooldown
+    canAttack = true;
+    attackHitbox.Monitoring = false;
+}
+
+private void OnFatigueTimeout()
+{
+    // Drain LightFruit while torch is on
+    if (torchOn)
+    {
+        LightFruit -= (int)TorchDrainRate;
+        if (LightFruit <= 0)
+        {
+            LightFruit = 0;
+            sfxBurnout.Play();
+            extras.StartTorchCooldown();
+            DisableTorch();
+        }
+    }
+}
+
+private void EnableTorch()
+{
+    // Turn torch on
+    torchOn = true;
+    torch.Visible = true;
+    sfxTorchOn.Play();
+    pTorch.Restart();
+    fatigueTimer.Start();
+}
+
+private void DisableTorch()
+{
+    // Turn torch off
+    if (torchOn)
+    {
+        sfxTorchOff.Play();
+        pTorch.Restart();
+    }
+    torchOn = false;
+    torch.Visible = false;
+    fatigueTimer.Stop();
+}
+
+public void TakeDamage(int amount)
+{
+    // Handle damage and death
+    Health -= amount;
+    if (Health <= 0)
+    {
+        Health = 0;
+        Die();
+    }
+    else
+    {
+        extras.FlashDamage(sprite);
+    }
+}
+
+private void Die()
+{
+    // Trigger death behavior
+    extras.ShowDeathScreen();
+}
+
+private void OnAttackHitboxBodyEntered(Node body)
+{
+    // Deal damage to enemies
+    if (body.IsInGroup("enemies"))
+    {
+        body.Call("take_damage", 10);
+    }
+}
+
+private void OnWeaponSelected(string weaponName)
+{
+    // React to weapon selection
+    GD.Print($"Equipped: {weaponName}");
+    // Add weapon swap logic here
+}
+
+}
 
